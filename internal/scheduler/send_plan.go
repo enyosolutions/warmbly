@@ -167,6 +167,8 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 			d.reopensAt = gate.reopensAt
 		case gateAdmission:
 			d.state = models.MailboxPlanAdmission
+		case gateSendAs:
+			d.state = models.MailboxPlanSendAsUnverified
 		default:
 			d.state = models.MailboxPlanHealthHold
 			if gate.cloudStatus {
@@ -495,6 +497,7 @@ func (s *schedulerService) PlanCampaignDay(ctx context.Context, campaignID uuid.
 		{kind: models.SendLimitWarmupGraduation}, {kind: models.SendLimitWorkspaceRisk},
 		{kind: models.SendLimitDomainAuth}, {kind: models.SendLimitResting}, {kind: models.SendLimitHealthHold},
 		{kind: models.SendLimitCloudStatusHold}, {kind: models.SendLimitRecovery}, {kind: models.SendLimitCooldown},
+		{kind: models.SendLimitSendAsUnverified},
 		{kind: models.SendLimitOtherCampaigns}, {kind: models.SendLimitHealthPace},
 		{kind: models.SendLimitMailboxHours}, {kind: models.SendLimitSendingBehavior}, {kind: models.SendLimitSpacing},
 	}
@@ -534,6 +537,8 @@ func (s *schedulerService) PlanCampaignDay(ctx context.Context, campaignID uuid.
 			add(models.SendLimitRecovery, d.byGate)
 		case gateCooldown:
 			add(models.SendLimitCooldown, d.byGate)
+		case gateSendAs:
+			add(models.SendLimitSendAsUnverified, d.byGate)
 		}
 		add(models.SendLimitOtherCampaigns, d.byOther)
 		add(models.SendLimitHealthPace, d.byHealthPace)

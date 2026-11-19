@@ -151,6 +151,13 @@ func (s *schedulerService) CalculateNextCampaignTime(ctx context.Context, campai
 				// rather than blaming a wait nobody configured.
 				message = "Every lead that is due is waiting for its own mailbox: each contact keeps the address they first heard from, and those mailboxes have nothing left for now"
 				metadata["waiting_on_sender"] = true
+				// "Nothing left" is wrong for a mailbox held on its campaign
+				// alias: it will not come back by itself, so say what to fix.
+				if held := heldSendAsMailboxes(accounts); len(held) > 0 {
+					message += fmt.Sprintf(". The send-as address this campaign uses on %s is no longer verified by the provider: verify it again, or pick another address for that mailbox in the campaign's senders",
+						strings.Join(held, ", "))
+					metadata["send_as_unverified"] = len(held)
+				}
 			}
 			if !senderWait && campaign.EntryDelayMinutes > 0 {
 				message += fmt.Sprintf(" (this campaign holds the first email for %s after a contact enters it)",
@@ -777,8 +784,11 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 		if bound != nil {
 			gate := gates[bound.ID]
 			if gate.paced {
-				logDecisionOnce("sender_busy",
-					"Some leads are waiting for their own mailbox: every contact keeps the address they first heard from, and that mailbox has nothing left for now",
+				message := "Some leads are waiting for their own mailbox: every contact keeps the address they first heard from, and that mailbox has nothing left for now"
+				if gate.reason == gateSendAs {
+					message = "Some leads are waiting for their own mailbox: the send-as address this campaign uses on it is no longer verified by the provider. Verify it again, or pick another address for this mailbox in the campaign's senders"
+				}
+				logDecisionOnce("sender_busy", message,
 					map[string]interface{}{"mailbox": bound.Email, "reason": gate.reason})
 				resume := gate.reopensAt
 				if resume.IsZero() {

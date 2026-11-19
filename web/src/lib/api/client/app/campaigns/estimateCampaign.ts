@@ -50,7 +50,8 @@ export type EstimateSenderState =
     | "send_authority"
     | "domain_auth"
     | "resting"
-    | "no_worker";
+    | "no_worker"
+    | "send_as_unverified";
 
 export interface CampaignEstimateDay {
     date: string;

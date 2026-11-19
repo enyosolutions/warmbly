@@ -60,6 +60,10 @@ const (
 	gateRecovery  = "send_recovery"
 	gateCooldown  = "send_cooldown"
 	gateAdmission = "send_authority"
+	// gateSendAs is a mailbox whose campaign alias its provider no longer
+	// verifies. Paced: the campaign chose that address, so its leads wait for
+	// it rather than hear from another one, and new leads go elsewhere.
+	gateSendAs = "send_as_unverified"
 )
 
 // workerRecheck is when a mailbox without a live worker is looked at again:
@@ -308,6 +312,13 @@ func (s *schedulerService) gateFor(ctx context.Context, p *campaignPass, acct mo
 		case models.WarmupHealthWatch, models.WarmupHealthThrottled:
 			remaining = int(float64(remaining) * adjustmentFor(h.state).volumeMultiplier)
 		}
+	}
+	// The campaign's alias for this mailbox is no longer verified. After the
+	// standing gates, which move a lead on their own terms; this one only ever
+	// holds. No reopen time: nothing here knows when the alias comes back, so
+	// a waiting lead is looked at again the next day.
+	if acct.CampaignSendAsHeld {
+		return mailboxGate{reason: gateSendAs, paced: true}, 0
 	}
 	// No worker can take the send, so picking the mailbox would only fail the
 	// hand-off. Paced: the worker reconciler places it again within minutes,

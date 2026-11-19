@@ -234,6 +234,13 @@ type CampaignSender struct {
 	Weight         int        `json:"weight"`
 	LastSentAt     *time.Time `json:"last_sent_at,omitempty"`
 	Enabled        bool       `json:"enabled"`
+	// SendAsEmail is the Gmail send-as alias this campaign sends from on this
+	// mailbox. Empty keeps the mailbox's own choice.
+	SendAsEmail string `json:"send_as_email"`
+	// SendAsVerified reports whether the mailbox's provider still verifies
+	// SendAsEmail. False on a set alias means the mailbox is held for this
+	// campaign until it is verified again; always true when SendAsEmail is empty.
+	SendAsVerified bool `json:"send_as_verified"`
 }
 
 // CampaignSenderInput is the write shape for PUT /campaigns/:id/senders.
@@ -241,6 +248,10 @@ type CampaignSenderInput struct {
 	EmailAccountID uuid.UUID `json:"email_account_id"`
 	Weight         *int      `json:"weight,omitempty"`
 	Enabled        *bool     `json:"enabled,omitempty"`
+	// SendAsEmail picks a Gmail send-as alias for this campaign on this
+	// mailbox. Omitted keeps the stored choice, so a client that predates the
+	// field never clears one; "" clears it back to the mailbox's own choice.
+	SendAsEmail *string `json:"send_as_email,omitempty"`
 }
 
 type MiniCampaign struct {
@@ -388,6 +399,9 @@ const (
 	EstimateSenderRecovery   = "send_recovery"
 	EstimateSenderCooldown   = "send_cooldown"
 	EstimateSenderAdmission  = "send_authority"
+	// EstimateSenderSendAsUnverified: the campaign's send-as address on this
+	// mailbox is no longer verified by the provider, so it is held.
+	EstimateSenderSendAsUnverified = "send_as_unverified"
 )
 
 // CampaignEstimateWarmup is the warmup traffic running beside the campaign.

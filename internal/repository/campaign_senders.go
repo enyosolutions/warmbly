@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -43,6 +44,12 @@ func ResolveCampaignSenderPool(ctx context.Context, repo CampaignSenderSource, c
 	if err != nil {
 		return pool, err
 	}
+	// The campaign's own alias rides on the explicit pool's copies, so every
+	// caller (the scheduler's gates, the send plan, previews) sees the address
+	// this campaign actually sends as, and which mailboxes it holds.
+	for i := range explicit {
+		explicit[i].Account = ApplyCampaignSendAs(explicit[i].Account, explicit[i].SendAsEmail, explicit[i].SendAsVerified)
+	}
 	pool.Explicit = explicit
 	seen := map[string]bool{}
 	for _, snd := range explicit {
@@ -69,6 +76,20 @@ func ResolveCampaignSenderPool(ctx context.Context, repo CampaignSenderSource, c
 		pool.Accounts = all
 	}
 	return pool, nil
+}
+
+// ApplyCampaignSendAs returns the mailbox as one campaign sends from it. An
+// empty campaign alias leaves the mailbox's own choice. A set one replaces it
+// when verified, and otherwise marks the mailbox held: the alias is kept, so a
+// held mailbox can never quietly send from the mailbox address instead.
+func ApplyCampaignSendAs(acct models.Email, alias string, verified bool) models.Email {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		return acct
+	}
+	acct.SendAsEmail = alias
+	acct.CampaignSendAsHeld = !verified
+	return acct
 }
 
 // CampaignSenderStrategyExplicit is the campaigns.sender_strategy value that

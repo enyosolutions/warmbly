@@ -87,6 +87,7 @@ const (
 	SendLimitCloudStatusHold    = "cloud_status_hold"
 	SendLimitRecovery           = "send_recovery"
 	SendLimitCooldown           = "send_cooldown"
+	SendLimitSendAsUnverified   = "send_as_unverified"
 	SendLimitOtherCampaigns     = "other_campaigns"
 	SendLimitHealthPace         = "warmup_health_pace"
 	SendLimitMailboxHours       = "mailbox_hours"
@@ -197,6 +198,9 @@ const (
 	MailboxPlanWindowClosed = "window_closed"
 	// MailboxPlanNoWorker is a mailbox no heartbeating worker holds right now.
 	MailboxPlanNoWorker = "no_worker"
+	// MailboxPlanSendAsUnverified is a mailbox whose campaign alias its
+	// provider no longer verifies: held for this campaign, its leads waiting.
+	MailboxPlanSendAsUnverified = "send_as_unverified"
 )
 
 // SendBottleneckBudgetSpent is the Bottleneck of a campaign that has sent

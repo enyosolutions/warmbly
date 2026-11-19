@@ -68,6 +68,11 @@ const LIMIT_META: Record<SendLimitKind, LimitMeta> = {
         hint: "A mailbox is temporarily unavailable after a provider refusal. It is checked again when its cooldown expires.",
         to: "/app/emails",
     },
+    send_as_unverified: {
+        label: "Send-as address not verified",
+        hint: "Gmail no longer verifies the send-as address this campaign uses on a mailbox. It sends nothing for this campaign and its leads wait until the address is verified again or another one is picked.",
+        to: "preferences#senders",
+    },
     other_campaigns: {
         label: "Used by other campaigns",
         hint: "A mailbox's daily cap is shared by every campaign it is on; these sends went to another one today.",
@@ -132,6 +137,7 @@ const STATE_META: Record<MailboxPlan["state"], { label: string; tone: string }> 
     send_cooldown: { label: "Cooling down", tone: "bg-amber-50 text-amber-700 ring-amber-200" },
     send_authority: { label: "Send unavailable", tone: "bg-amber-50 text-amber-700 ring-amber-200" },
     no_worker: { label: "Reconnecting", tone: "bg-amber-50 text-amber-700 ring-amber-200" },
+    send_as_unverified: { label: "Send-as unverified", tone: "bg-amber-50 text-amber-700 ring-amber-200" },
     window_closed: { label: "Window closed", tone: "bg-amber-50 text-amber-700 ring-amber-200" },
 };
 

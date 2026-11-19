@@ -13,6 +13,7 @@ export type SendLimitKind =
     | "cloud_status_hold"
     | "send_recovery"
     | "send_cooldown"
+    | "send_as_unverified"
     | "other_campaigns"
     | "warmup_health_pace"
     | "mailbox_hours"
@@ -39,6 +40,7 @@ export type MailboxPlanState =
     | "send_cooldown"
     | "send_authority"
     | "no_worker"
+    | "send_as_unverified"
     | "window_closed";
 
 export interface SendLimit {

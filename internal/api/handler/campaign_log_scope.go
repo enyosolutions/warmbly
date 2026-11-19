@@ -123,7 +123,7 @@ func scopedCampaignLog(entry models.CampaignLog, allowed []uuid.UUID, addresses 
 		if mailbox := scopedCampaignLogMailbox(src, keep, addresses); mailbox != nil {
 			meta["mailbox"] = mailbox["mailbox"]
 			if entry.EventType == "sender_busy" {
-				copyCampaignLogEnum(meta, src, "reason", "budget", "hours", "no_worker", "send_recovery", "send_cooldown", "send_authority", "resting", "health", "domain_auth", "no_working_day")
+				copyCampaignLogEnum(meta, src, "reason", "budget", "hours", "no_worker", "send_recovery", "send_cooldown", "send_authority", "resting", "health", "domain_auth", "no_working_day", "send_as_unverified")
 			} else {
 				copyCampaignLogEnum(meta, src, "scope", "mailbox", "campaign")
 			}
@@ -199,7 +199,7 @@ func scopedCampaignLogMailbox(src map[string]interface{}, keep map[uuid.UUID]boo
 	copyCampaignLogNumbers(out, src, "cap", "sent_today")
 	copyCampaignLogBool(out, src, "sending_now")
 	copyCampaignLogEnum(out, src, "limited_by", "mailbox_daily_cap", "campaign_daily_limit", "campaign_ramp", "warmup_graduation", "workspace_risk")
-	copyCampaignLogEnum(out, src, "gate", "budget", "hours", "no_worker", "send_recovery", "send_cooldown", "send_authority", "resting", "health", "domain_auth", "no_working_day")
+	copyCampaignLogEnum(out, src, "gate", "budget", "hours", "no_worker", "send_recovery", "send_cooldown", "send_authority", "resting", "health", "domain_auth", "no_working_day", "send_as_unverified")
 	copyCampaignLogEnum(out, src, "warmup_health", "healthy", "watch", "throttled", "quarantined", "blocked")
 	return out
 }

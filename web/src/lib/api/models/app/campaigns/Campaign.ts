@@ -139,6 +139,12 @@ export interface CampaignSender {
     weight: number;
     last_sent_at?: Date | null;
     enabled: boolean;
+    /** Gmail send-as address this campaign sends from on the mailbox; "" for
+     *  the mailbox's own choice. Absent from an older backend. */
+    send_as_email?: string;
+    /** False when the provider no longer verifies send_as_email: the mailbox
+     *  is held for this campaign and its leads wait. */
+    send_as_verified?: boolean;
 }
 
 // Write shape for PUT /campaigns/:id/senders (full-replace of the pool).
@@ -146,4 +152,6 @@ export interface CampaignSenderInput {
     email_account_id: string;
     weight?: number;
     enabled?: boolean;
+    /** Omitted keeps the stored alias; "" clears it to the mailbox's own choice. */
+    send_as_email?: string;
 }

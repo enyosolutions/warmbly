@@ -2129,6 +2129,9 @@ func syncCampaignSendersTx(ctx context.Context, tx pgx.Tx, campaignID uuid.UUID,
 	accountIDs := make([]uuid.UUID, 0, len(in))
 	weights := make(map[uuid.UUID]int, len(in))
 	enabledFor := make(map[uuid.UUID]bool, len(in))
+	// sendAsFor holds only the senders whose alias the caller set; a sender
+	// absent from it keeps its stored alias on upsert.
+	sendAsFor := make(map[uuid.UUID]string, len(in))
 	seen := make(map[uuid.UUID]struct{}, len(in))
 	for _, s := range in {
 		if s.EmailAccountID == uuid.Nil {
@@ -2152,6 +2155,13 @@ func syncCampaignSendersTx(ctx context.Context, tx pgx.Tx, campaignID uuid.UUID,
 		accountIDs = append(accountIDs, s.EmailAccountID)
 		weights[s.EmailAccountID] = weight
 		enabledFor[s.EmailAccountID] = enabled
+		if s.SendAsEmail != nil {
+			alias := strings.TrimSpace(*s.SendAsEmail)
+			if strings.ContainsAny(alias, "\r\n\x00") {
+				return nil, errx.ErrEmailSendAsUnknown
+			}
+			sendAsFor[s.EmailAccountID] = alias
+		}
 	}
 
 	// Ownership check: every referenced mailbox must be reachable in the
@@ -2175,6 +2185,19 @@ func syncCampaignSendersTx(ctx context.Context, tx pgx.Tx, campaignID uuid.UUID,
 		return nil, errx.New(errx.BadRequest, "one or more sender mailboxes do not belong to this account")
 	}
 
+	// A newly chosen alias must be one the provider verifies for that mailbox
+	// now. Only the save is checked here; an alias that stops being verified
+	// later stays stored and holds the mailbox for this campaign (see
+	// CampaignSendAsVerifiedSQL).
+	for id, alias := range sendAsFor {
+		if alias == "" {
+			continue
+		}
+		if xerr := checkCampaignSendAsTx(ctx, tx, id, alias); xerr != nil {
+			return nil, xerr
+		}
+	}
+
 	// Delete rows that are no longer in the set (CASCADE-safe; preserves the
 	// surviving rows so their cursors carry over).
 	if _, err := tx.Exec(ctx,
@@ -2185,15 +2208,21 @@ func syncCampaignSendersTx(ctx context.Context, tx pgx.Tx, campaignID uuid.UUID,
 		return nil, errx.InternalError()
 	}
 
-	// Upsert the desired rows. ON CONFLICT updates weight/enabled but leaves
+	// Upsert the desired rows. ON CONFLICT updates weight/enabled, and the
+	// alias only when the caller sent one, but leaves
 	// rotation_position/last_sent_at untouched.
 	for _, id := range accountIDs {
+		var sendAs *string
+		if alias, ok := sendAsFor[id]; ok {
+			sendAs = &alias
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO campaign_senders (campaign_id, email_account_id, weight, enabled)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO campaign_senders (campaign_id, email_account_id, weight, enabled, send_as_email)
+			VALUES ($1, $2, $3, $4, COALESCE($5::text, ''))
 			ON CONFLICT (campaign_id, email_account_id)
-			DO UPDATE SET weight = EXCLUDED.weight, enabled = EXCLUDED.enabled
-		`, campaignID, id, weights[id], enabledFor[id]); err != nil {
+			DO UPDATE SET weight = EXCLUDED.weight, enabled = EXCLUDED.enabled,
+				send_as_email = COALESCE($5::text, campaign_senders.send_as_email)
+		`, campaignID, id, weights[id], enabledFor[id], sendAs); err != nil {
 			db.CaptureError(err, "campaign_senders upsert", []any{campaignID, id}, "exec")
 			return nil, errx.InternalError()
 		}
@@ -2208,13 +2237,59 @@ type campaignSenderQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
+// CampaignSendAsVerifiedSQL is true when a campaign_senders row (alias cs) may
+// send as its alias from its mailbox (alias ea): no alias, the mailbox's own
+// address, or an address the provider last reported as verified. Gmail only;
+// any other provider exposes no send-as list, so a stored alias there is never
+// verified. Every reader of the alias goes through this one predicate, so the
+// picker, the scheduler and the send agree on when a mailbox is held.
+const CampaignSendAsVerifiedSQL = `(
+	cs.send_as_email = ''
+	OR (ea.provider = 'gmail' AND (
+		lower(cs.send_as_email) = lower(ea.email)
+		OR EXISTS (
+			SELECT 1 FROM jsonb_array_elements(ea.send_as) AS sa
+			WHERE (sa->>'verified')::boolean AND lower(sa->>'email') = lower(cs.send_as_email)
+		)
+	))
+)`
+
+// checkCampaignSendAsTx refuses an alias the mailbox's provider does not
+// verify right now, with the same errors the mailbox's own alias picker uses.
+func checkCampaignSendAsTx(ctx context.Context, tx pgx.Tx, emailAccountID uuid.UUID, alias string) *errx.Error {
+	var provider string
+	var verified bool
+	err := tx.QueryRow(ctx, `
+		SELECT ea.provider,
+		       lower(ea.email) = lower($2) OR EXISTS (
+		           SELECT 1 FROM jsonb_array_elements(ea.send_as) AS sa
+		           WHERE (sa->>'verified')::boolean AND lower(sa->>'email') = lower($2)
+		       )
+		FROM email_accounts ea
+		WHERE ea.id = $1
+	`, emailAccountID, alias).Scan(&provider, &verified)
+	if err != nil {
+		db.CaptureError(err, "campaign_senders send-as check", []any{emailAccountID}, "queryrow")
+		return errx.InternalError()
+	}
+	if models.InboxProvider(provider) != models.InboxProviderGoogle {
+		return errx.ErrEmailSendAsUnsupported
+	}
+	if !verified {
+		return errx.ErrEmailSendAsUnknown
+	}
+	return nil
+}
+
 // readCampaignSendersTx loads the explicit sender pool inside a tx.
 func readCampaignSendersTx(ctx context.Context, q campaignSenderQuerier, campaignID uuid.UUID) ([]models.CampaignSender, *errx.Error) {
 	rows, err := q.Query(ctx, `
-		SELECT email_account_id, weight, last_sent_at, enabled
-		FROM campaign_senders
-		WHERE campaign_id = $1
-		ORDER BY created_at ASC, email_account_id ASC
+		SELECT cs.email_account_id, cs.weight, cs.last_sent_at, cs.enabled, cs.send_as_email,
+		       `+CampaignSendAsVerifiedSQL+`
+		FROM campaign_senders cs
+		JOIN email_accounts ea ON ea.id = cs.email_account_id
+		WHERE cs.campaign_id = $1
+		ORDER BY cs.created_at ASC, cs.email_account_id ASC
 	`, campaignID)
 	if err != nil {
 		db.CaptureError(err, "campaign_senders select", []any{campaignID}, "query")
@@ -2225,7 +2300,7 @@ func readCampaignSendersTx(ctx context.Context, q campaignSenderQuerier, campaig
 	senders := make([]models.CampaignSender, 0)
 	for rows.Next() {
 		var s models.CampaignSender
-		if err := rows.Scan(&s.EmailAccountID, &s.Weight, &s.LastSentAt, &s.Enabled); err != nil {
+		if err := rows.Scan(&s.EmailAccountID, &s.Weight, &s.LastSentAt, &s.Enabled, &s.SendAsEmail, &s.SendAsVerified); err != nil {
 			db.CaptureError(err, "", nil, "scan")
 			return nil, errx.InternalError()
 		}
@@ -2236,6 +2311,28 @@ func readCampaignSendersTx(ctx context.Context, q campaignSenderQuerier, campaig
 		return nil, errx.InternalError()
 	}
 	return senders, nil
+}
+
+// CampaignSenderSendAs reads the campaign's alias for one mailbox, and whether
+// the provider verifies it now, at the moment of a send. A mailbox with no
+// campaign_senders row (resolved from tags or the "all" fallback) has no
+// campaign alias: "" and true.
+func (r *campaignRepository) CampaignSenderSendAs(ctx context.Context, campaignID, emailAccountID uuid.UUID) (string, bool, error) {
+	var alias string
+	var verified bool
+	err := resultDB(ctx, r.DB).QueryRow(ctx, `
+		SELECT cs.send_as_email, `+CampaignSendAsVerifiedSQL+`
+		FROM campaign_senders cs
+		JOIN email_accounts ea ON ea.id = cs.email_account_id
+		WHERE cs.campaign_id = $1 AND cs.email_account_id = $2
+	`, campaignID, emailAccountID).Scan(&alias, &verified)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", true, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return alias, verified, nil
 }
 
 // GetCampaignSenders returns the explicit sender pool for a campaign.

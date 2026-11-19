@@ -505,6 +505,42 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) (result *errx
 	if xerr != nil {
 		return xerr
 	}
+	// STEP 7.45: The address this campaign sends as from this mailbox, read
+	// now rather than trusted from the pass: the provider can stop verifying
+	// an alias between the two. A held mailbox sends nothing for this campaign
+	// and never falls back to another address; the next pass sees the same
+	// hold, gives new leads to other mailboxes and leaves this one's waiting.
+	if aliases, ok := s.campaignRepo.(campaignSendAsReader); ok {
+		alias, verified, aerr := aliases.CampaignSenderSendAs(ctx, campaign.ID, account.ID)
+		if aerr != nil {
+			errs.CaptureException(aerr)
+			s.taskRepo.RecordTaskFailure(ctx, taskID, "Could not read the campaign's send-as address", aerr.Error())
+			s.retryCampaignTickLater(ctx, taskRecord)
+			executionStatus = "failed"
+			return errx.InternalError()
+		}
+		sending := repository.ApplyCampaignSendAs(*account, alias, verified)
+		if sending.CampaignSendAsHeld {
+			if s.campaignLogRepo != nil {
+				s.campaignLogRepo.CreateLog(ctx, &repository.CampaignLogEntry{
+					CampaignID: campaign.ID,
+					EventType:  "sender_busy",
+					Message:    "An email was held: the send-as address this campaign uses on its mailbox is no longer verified by the provider",
+					Metadata: map[string]interface{}{
+						"mailbox": account.Email,
+						"reason":  "send_as_unverified",
+					},
+				})
+			}
+			if terr := s.createCampaignTask(ctx, campaign.ID, account.ID, scheduler.ClaimRetrySlot()); terr != nil {
+				log.Warn().Err(terr).Str("campaign_id", campaign.ID.String()).Str("task_id", taskID.String()).Msg("Failed to schedule the campaign's next pass after holding a mailbox whose send-as address is unverified")
+			}
+			s.taskRepo.UpdateTaskStatus(ctx, taskID, "completed")
+			executionStatus = "completed"
+			return nil
+		}
+		*account = sending
+	}
 	if claimer, ok := s.scheduler.(scheduler.SendClaimer); ok {
 		claimed, cerr := claimer.ClaimSend(ctx, account)
 		if cerr != nil {
@@ -1998,4 +2034,11 @@ func selectAndRender(ctx context.Context, picker variantSelector, orgID, campaig
 		out.BodyPlain = ExtractPlainTextFromHTML(out.BodyHTML)
 	}
 	return out, nil
+}
+
+// campaignSendAsReader is the campaign repository's read of one sender's
+// campaign alias. Asserted rather than required, like scheduler.SendClaimer,
+// so a repository without campaign aliases sends as the mailbox always has.
+type campaignSendAsReader interface {
+	CampaignSenderSendAs(ctx context.Context, campaignID, emailAccountID uuid.UUID) (string, bool, error)
 }

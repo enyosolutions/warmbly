@@ -181,6 +181,17 @@ export default function CampaignPreferences() {
     // we diff against. Seeded from the campaign's current senders.
     const [explicitAccounts, setExplicitAccounts] = React.useState<string[]>([]);
     const [savedAccounts, setSavedAccounts] = React.useState<string[]>([]);
+    // The campaign's send-as address per picked mailbox ("" = the mailbox's own
+    // choice), its saved baseline, and the saved ones Gmail no longer verifies.
+    const [sendAs, setSendAs] = React.useState<Record<string, string>>({});
+    const [savedSendAs, setSavedSendAs] = React.useState<Record<string, string>>({});
+    const unverifiedSendAs = React.useMemo(() => {
+        const out: Record<string, boolean> = {};
+        for (const s of senders ?? []) {
+            if (s.send_as_email && s.send_as_verified === false) out[s.email_account_id] = true;
+        }
+        return out;
+    }, [senders]);
 
     const ids = React.useMemo(() => SECTIONS.map((s) => s.id), []);
     const { activeId, scrollTo } = useScrollSpy(ids);
@@ -195,6 +206,10 @@ export default function CampaignPreferences() {
         const accountIds = senders.map((s) => s.email_account_id);
         setExplicitAccounts(accountIds);
         setSavedAccounts(accountIds);
+        const aliases: Record<string, string> = {};
+        for (const s of senders) aliases[s.email_account_id] = s.send_as_email ?? "";
+        setSendAs(aliases);
+        setSavedSendAs(aliases);
     }, [senders]);
 
     const getChanges = (): Partial<Campaign> => {
@@ -297,11 +312,18 @@ export default function CampaignPreferences() {
 
     // Whether the explicit sender pool changed (mailboxes picked individually).
     // Tags are diffed separately via getChanges → email_tags.
+    // A send-as address counts as changed only against what is saved, so a
+    // save that touches nothing else never re-sends (and re-validates) a stored
+    // address Gmail has since stopped verifying.
+    const sendAsChanged = React.useCallback(
+        (id: string) => (sendAs[id] ?? "") !== (savedSendAs[id] ?? ""),
+        [sendAs, savedSendAs],
+    );
     const accountsDirty = React.useMemo(() => {
         if (explicitAccounts.length !== savedAccounts.length) return true;
         const a = new Set(savedAccounts);
-        return explicitAccounts.some((id) => !a.has(id));
-    }, [explicitAccounts, savedAccounts]);
+        return explicitAccounts.some((id) => !a.has(id) || sendAsChanged(id));
+    }, [explicitAccounts, savedAccounts, sendAsChanged]);
 
     const validationError = (): string | null => {
         if (!isValidCampaignDailyLimit(newData.daily_limit, campaign.daily_limit)) {
@@ -339,9 +361,18 @@ export default function CampaignPreferences() {
                     }
                     if (writeSenders) {
                         await replaceSenders.mutateAsync(
-                            explicitAccounts.map((id) => ({ email_account_id: id, weight: 1 })),
+                            explicitAccounts.map((id) => ({
+                                email_account_id: id,
+                                weight: 1,
+                                ...(sendAsChanged(id) && { send_as_email: sendAs[id] ?? "" }),
+                            })),
                         );
                         setSavedAccounts(explicitAccounts);
+                        setSavedSendAs((bef) => {
+                            const next = { ...bef };
+                            for (const id of explicitAccounts) next[id] = sendAs[id] ?? "";
+                            return next;
+                        });
                     }
                 })(),
                 {
@@ -381,6 +412,9 @@ export default function CampaignPreferences() {
                         setNewCampaign={setNewData}
                         explicitAccounts={explicitAccounts}
                         setExplicitAccounts={setExplicitAccounts}
+                        sendAs={sendAs}
+                        onSendAsChange={(id, alias) => setSendAs((bef) => ({ ...bef, [id]: alias }))}
+                        unverifiedSendAs={unverifiedSendAs}
                     />
                 );
             case "deliverability":

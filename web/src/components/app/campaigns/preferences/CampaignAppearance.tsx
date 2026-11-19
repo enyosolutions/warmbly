@@ -8,6 +8,7 @@ import type Campaign from "@/lib/api/models/app/campaigns/Campaign";
 import { isValidCampaignDailyLimit } from "@/lib/api/models/app/campaigns/Campaign";
 import { Label, NumberInput, TextInput } from "@/components/ui/field";
 import SenderSelector from "./SenderSelector";
+import CampaignSendAs from "./CampaignSendAs";
 import { SettingRow, Toggle } from "./components/CampaignPreferenceBoolBox";
 import { SelectMenu, type SelectOption } from "@/components/ui/select-menu";
 import { useOutreachSettings } from "@/lib/api/hooks/app/outreach/useOutreachSettings";
@@ -65,12 +66,18 @@ export function SendingAccountsSection({
     setNewCampaign,
     explicitAccounts,
     setExplicitAccounts,
+    sendAs,
+    onSendAsChange,
+    unverifiedSendAs,
 }: {
     newCampaign: Campaign;
     savedDailyLimit?: number;
     setNewCampaign: SetCampaign;
     explicitAccounts: string[];
     setExplicitAccounts: React.Dispatch<React.SetStateAction<string[]>>;
+    sendAs: Record<string, string>;
+    onSendAsChange: (accountId: string, alias: string) => void;
+    unverifiedSendAs: Record<string, boolean>;
 }) {
     const dailyInvalid = !isValidCampaignDailyLimit(newCampaign.daily_limit, savedDailyLimit);
     const dailyLegacy = !dailyInvalid && newCampaign.daily_limit <= 0;
@@ -90,6 +97,12 @@ export function SendingAccountsSection({
                     Leave empty to send from every active mailbox.
                 </p>
             </div>
+            <CampaignSendAs
+                accountIds={explicitAccounts}
+                sendAs={sendAs}
+                onChange={onSendAsChange}
+                unverified={unverifiedSendAs}
+            />
             <div>
                 <Label>Maximum per mailbox per day</Label>
                 <NumberInput

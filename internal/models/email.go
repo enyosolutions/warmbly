@@ -58,6 +58,12 @@ type Email struct {
 	// mailbox's own address. The alias list itself is not carried here: it is
 	// read through the identity endpoint, like sync state and behaviour.
 	SendAsEmail string `json:"send_as_email"`
+	// CampaignSendAsHeld is set only on a mailbox resolved for one campaign
+	// (repository.ResolveCampaignSenderPool, repository.ApplyCampaignSendAs)
+	// whose campaign alias the provider no longer verifies. The mailbox must
+	// not send for that campaign, and must not fall back to another address:
+	// its leads wait. Never stored and never serialized.
+	CampaignSendAsHeld bool `json:"-"`
 
 	Provider string `json:"provider"`
 	Status   string `json:"status"`

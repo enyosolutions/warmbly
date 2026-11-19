@@ -192,6 +192,7 @@ const STATE: Record<EstimateSenderState, { label: string; cls: string }> = {
     send_recovery: { label: "Send recovery", cls: "bg-rose-50 text-rose-700" },
     send_cooldown: { label: "Cooling down", cls: "bg-amber-50 text-amber-700" },
     send_authority: { label: "Send unavailable", cls: "bg-slate-100 text-slate-600" },
+    send_as_unverified: { label: "Send-as unverified", cls: "bg-amber-50 text-amber-700" },
 };
 
 function capLabel(s: CampaignEstimateSender, tz?: string): string {
