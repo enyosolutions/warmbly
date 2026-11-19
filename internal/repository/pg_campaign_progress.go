@@ -394,6 +394,16 @@ func NewCampaignProgressRepository(db *pgxpool.Pool) CampaignProgressRepository 
 // row, so two ticks that picked the same pair cannot both dispatch. A step
 // walked back after a worker failure has both cleared and is claimable again.
 func (r *campaignProgressRepository) ReserveSend(ctx context.Context, campaignID, contactID, sequenceID, taskID, senderID uuid.UUID, newLead bool, arm *models.StepABArm, tracking models.SendTracking) (bool, error) {
+	return r.reserveSend(ctx, campaignID, contactID, sequenceID, taskID, senderID, nil, newLead, arm, tracking)
+}
+
+// ReserveSendAs is ReserveSend that also records the lead's alias with its mailbox, atomically.
+func (r *campaignProgressRepository) ReserveSendAs(ctx context.Context, campaignID, contactID, sequenceID, taskID, senderID uuid.UUID, sendAs string, newLead bool, arm *models.StepABArm, tracking models.SendTracking) (bool, error) {
+	return r.reserveSend(ctx, campaignID, contactID, sequenceID, taskID, senderID, &sendAs, newLead, arm, tracking)
+}
+
+// reserveSend: a nil sendAs keeps the lead's alias on the same mailbox and clears it on a new one.
+func (r *campaignProgressRepository) reserveSend(ctx context.Context, campaignID, contactID, sequenceID, taskID, senderID uuid.UUID, sendAs *string, newLead bool, arm *models.StepABArm, tracking models.SendTracking) (bool, error) {
 	tx, err := beginResultTx(ctx, r.db)
 	if err != nil {
 		return false, err
@@ -457,13 +467,22 @@ func (r *campaignProgressRepository) ReserveSend(ctx context.Context, campaignID
 	// for none that was not. Re-stated on every step, so it always names the
 	// latest sender: the placer hands a different mailbox when the bound one
 	// is gone or the campaign rotates follow-ups.
+	//
+	// The lead's alias travels with its mailbox binding.
 	if senderID != uuid.Nil {
 		if _, err := tx.Exec(ctx, `
 			UPDATE campaign_leads
-			SET email_account_id = $3, sender_assigned_at = NOW()
+			SET email_account_id = $3,
+			    sender_assigned_at = CASE WHEN email_account_id IS DISTINCT FROM $3 THEN NOW() ELSE sender_assigned_at END,
+			    send_as_email = CASE
+			        WHEN $4::text IS NOT NULL THEN $4::text
+			        WHEN email_account_id IS DISTINCT FROM $3 THEN ''
+			        ELSE send_as_email
+			    END
 			WHERE campaign_id = $1 AND contact_id = $2
-			  AND email_account_id IS DISTINCT FROM $3
-		`, campaignID, contactID, senderID); err != nil {
+			  AND (email_account_id IS DISTINCT FROM $3
+			       OR ($4::text IS NOT NULL AND send_as_email IS DISTINCT FROM $4::text))
+		`, campaignID, contactID, senderID, sendAs); err != nil {
 			return false, err
 		}
 	}
@@ -516,7 +535,7 @@ func (r *campaignProgressRepository) ReleaseSend(ctx context.Context, campaignID
 	// an earlier delivered step keeps its binding.
 	if _, err := tx.Exec(ctx, `
 		UPDATE campaign_leads cl
-		SET email_account_id = NULL, sender_assigned_at = NULL
+		SET email_account_id = NULL, sender_assigned_at = NULL, send_as_email = ''
 		WHERE cl.campaign_id = $1 AND cl.contact_id = $2
 		  AND cl.email_account_id IS NOT NULL
 		  AND NOT EXISTS (
@@ -645,7 +664,7 @@ func (r *campaignProgressRepository) WalkBackSend(ctx context.Context, campaignI
 			RETURNING send_attempts
 		), unbound AS (
 			UPDATE campaign_leads cl
-			SET email_account_id = NULL, sender_assigned_at = NULL
+			SET email_account_id = NULL, sender_assigned_at = NULL, send_as_email = ''
 			WHERE EXISTS (SELECT 1 FROM walked)
 			  AND cl.campaign_id = $1 AND cl.contact_id = $2
 			  AND cl.email_account_id IS NOT NULL
@@ -1429,6 +1448,11 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 	if router == nil {
 		return nil, nil, false, nil
 	}
+	// Leads whose own alias is no longer verified wait for it; the rest go ahead.
+	sendAsHeld, err := r.leadsWaitingOnSendAs(ctx, campaignID)
+	if err != nil {
+		return nil, nil, false, err
+	}
 
 	// Candidate selection runs in two phases so a pass never pays for the
 	// campaign's whole audience to find a small batch. Phase one enumerates the
@@ -1554,7 +1578,7 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 		if herr := hydrate(want); herr != nil {
 			return nil, nil, false, herr
 		}
-		if routeWindow(campaignID, router, want, inputs, excludeNewLeads, paced, limit, &pairs, noteDue) {
+		if routeWindow(campaignID, router, want, inputs, excludeNewLeads, paced, sendAsHeld, limit, &pairs, noteDue) {
 			return pairs, nil, false, nil
 		}
 	}
@@ -1574,7 +1598,7 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 				return nil, nil, false, herr
 			}
 		}
-		if routeWindow(campaignID, router, ordered, inputs, excludeNewLeads, paced, limit, &pairs, noteDue) || len(pairs) > 0 {
+		if routeWindow(campaignID, router, ordered, inputs, excludeNewLeads, paced, sendAsHeld, limit, &pairs, noteDue) || len(pairs) > 0 {
 			return pairs, nil, false, nil
 		}
 	}
@@ -1585,7 +1609,7 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 
 // routeWindow routes one hydrated window in order, appending due pairs and
 // noting next-due times. It reports true once the batch holds limit pairs.
-func routeWindow(campaignID uuid.UUID, router *campaignRouter, window []uuid.UUID, hydrated map[uuid.UUID]routeInput, excludeNewLeads bool, paced PacedSenders, limit int, pairs *[]ContactSequencePair, noteDue func(time.Time, bool)) bool {
+func routeWindow(campaignID uuid.UUID, router *campaignRouter, window []uuid.UUID, hydrated map[uuid.UUID]routeInput, excludeNewLeads bool, paced PacedSenders, sendAsHeld map[uuid.UUID]struct{}, limit int, pairs *[]ContactSequencePair, noteDue func(time.Time, bool)) bool {
 	// Route the window in its phase-one order so the batch keeps routing
 	// order across chunk boundaries.
 	for _, contactID := range window {
@@ -1630,6 +1654,11 @@ func routeWindow(campaignID uuid.UUID, router *campaignRouter, window []uuid.UUI
 		// wait node sends nothing, so no mailbox has to be free for it.
 		if back, ok := paced.reopening(in.sender); ok && router.isEmailStep(*res.Target) {
 			noteDue(back, true)
+			continue
+		}
+		// Due, but its alias is no longer verified: wait for it rather than change address.
+		if _, held := sendAsHeld[contactID]; held && router.isEmailStep(*res.Target) {
+			noteDue(time.Now().Add(sendAsRecheck), true)
 			continue
 		}
 		*pairs = append(*pairs, ContactSequencePair{ContactID: contactID, SequenceID: *res.Target, IsNewLead: res.IsNewLead, Instant: res.Instant, NotBefore: res.DueAt, AssignedSender: in.sender})
@@ -2879,4 +2908,39 @@ func (r *campaignProgressRepository) LeadSupply(ctx context.Context, campaignID 
 		}
 	}
 	return out, rows.Err()
+}
+
+// sendAsRecheck is when a lead waiting on its alias is looked at again.
+const sendAsRecheck = 6 * time.Hour
+
+// leadsWaitingOnSendAsSQL selects campaign $1's leads whose alias their mailbox no longer verifies.
+var leadsWaitingOnSendAsSQL = `
+	FROM campaign_leads cl
+	JOIN email_accounts ea ON ea.id = cl.email_account_id
+	WHERE cl.campaign_id = $1 AND cl.send_as_email <> ''
+	  AND NOT ` + SendAsVerifiedSQL("cl.send_as_email")
+
+// leadsWaitingOnSendAs lists the leads that wait on their send-as address.
+func (r *campaignProgressRepository) leadsWaitingOnSendAs(ctx context.Context, campaignID uuid.UUID) (map[uuid.UUID]struct{}, error) {
+	rows, err := resultDB(ctx, r.db).Query(ctx, `SELECT cl.contact_id `+leadsWaitingOnSendAsSQL, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]struct{}{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// CountLeadsWaitingOnSendAs counts them, for the scheduler's idle-campaign message.
+func (r *campaignProgressRepository) CountLeadsWaitingOnSendAs(ctx context.Context, campaignID uuid.UUID) (int, error) {
+	var n int
+	err := resultDB(ctx, r.db).QueryRow(ctx, `SELECT COUNT(*) `+leadsWaitingOnSendAsSQL, campaignID).Scan(&n)
+	return n, err
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"time"
@@ -505,13 +506,10 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) (result *errx
 	if xerr != nil {
 		return xerr
 	}
-	// STEP 7.45: The address this campaign sends as from this mailbox, read
-	// now rather than trusted from the pass: the provider can stop verifying
-	// an alias between the two. A held mailbox sends nothing for this campaign
-	// and never falls back to another address; the next pass sees the same
-	// hold, gives new leads to other mailboxes and leaves this one's waiting.
+	// STEP 7.45: The From address, read now: a bound lead keeps its alias, a new one draws a verified one; never fall back.
+	var leadSendAs *string // nil: this repository records no alias
 	if aliases, ok := s.campaignRepo.(campaignSendAsReader); ok {
-		alias, verified, aerr := aliases.CampaignSenderSendAs(ctx, campaign.ID, account.ID)
+		sa, aerr := aliases.CampaignLeadSendAs(ctx, campaign.ID, contact.ID, account.ID)
 		if aerr != nil {
 			errs.CaptureException(aerr)
 			s.taskRepo.RecordTaskFailure(ctx, taskID, "Could not read the campaign's send-as address", aerr.Error())
@@ -519,13 +517,13 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) (result *errx
 			executionStatus = "failed"
 			return errx.InternalError()
 		}
-		sending := repository.ApplyCampaignSendAs(*account, alias, verified)
-		if sending.CampaignSendAsHeld {
+		alias, held := pickLeadSendAs(sa, rand.IntN)
+		if held {
 			if s.campaignLogRepo != nil {
 				s.campaignLogRepo.CreateLog(ctx, &repository.CampaignLogEntry{
 					CampaignID: campaign.ID,
 					EventType:  "sender_busy",
-					Message:    "An email was held: the send-as address this campaign uses on its mailbox is no longer verified by the provider",
+					Message:    fmt.Sprintf("An email to %s was held: the send-as address it uses on its mailbox is no longer verified by the provider", contact.Email),
 					Metadata: map[string]interface{}{
 						"mailbox": account.Email,
 						"reason":  "send_as_unverified",
@@ -533,13 +531,16 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) (result *errx
 				})
 			}
 			if terr := s.createCampaignTask(ctx, campaign.ID, account.ID, scheduler.ClaimRetrySlot()); terr != nil {
-				log.Warn().Err(terr).Str("campaign_id", campaign.ID.String()).Str("task_id", taskID.String()).Msg("Failed to schedule the campaign's next pass after holding a mailbox whose send-as address is unverified")
+				log.Warn().Err(terr).Str("campaign_id", campaign.ID.String()).Str("task_id", taskID.String()).Msg("Failed to schedule the campaign's next pass after holding a send whose send-as address is unverified")
 			}
 			s.taskRepo.UpdateTaskStatus(ctx, taskID, "completed")
 			executionStatus = "completed"
 			return nil
 		}
-		*account = sending
+		if alias != "" {
+			account.SendAsEmail = alias
+		}
+		leadSendAs = &alias
 	}
 	if claimer, ok := s.scheduler.(scheduler.SendClaimer); ok {
 		claimed, cerr := claimer.ClaimSend(ctx, account)
@@ -879,7 +880,13 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) (result *errx
 		s.retryCampaignTickLater(ctx, taskRecord)
 		return errx.InternalError()
 	}
-	reserved, rerr := s.campaignProgressRepo.ReserveSend(ctx, campaign.ID, contact.ID, sequence.ID, taskID, account.ID, nextPair.IsNewLead, rendered.Arm, sendTracking)
+	var reserved bool
+	var rerr error
+	if reserver, ok := s.campaignProgressRepo.(leadSendAsReserver); ok && leadSendAs != nil {
+		reserved, rerr = reserver.ReserveSendAs(ctx, campaign.ID, contact.ID, sequence.ID, taskID, account.ID, *leadSendAs, nextPair.IsNewLead, rendered.Arm, sendTracking)
+	} else {
+		reserved, rerr = s.campaignProgressRepo.ReserveSend(ctx, campaign.ID, contact.ID, sequence.ID, taskID, account.ID, nextPair.IsNewLead, rendered.Arm, sendTracking)
+	}
 	if rerr != nil {
 		// The attempt could not be made durable, so it must not be made at all.
 		// Retry the whole task rather than sending something nothing remembers.
@@ -2036,9 +2043,26 @@ func selectAndRender(ctx context.Context, picker variantSelector, orgID, campaig
 	return out, nil
 }
 
-// campaignSendAsReader is the campaign repository's read of one sender's
-// campaign alias. Asserted rather than required, like scheduler.SendClaimer,
-// so a repository without campaign aliases sends as the mailbox always has.
+// campaignSendAsReader is asserted, like scheduler.SendClaimer, so a repository without aliases sends as before.
 type campaignSendAsReader interface {
-	CampaignSenderSendAs(ctx context.Context, campaignID, emailAccountID uuid.UUID) (string, bool, error)
+	CampaignLeadSendAs(ctx context.Context, campaignID, contactID, emailAccountID uuid.UUID) (repository.CampaignLeadSendAs, error)
+}
+
+// leadSendAsReserver records the lead's alias with its reservation.
+type leadSendAsReserver interface {
+	ReserveSendAs(ctx context.Context, campaignID, contactID, sequenceID, taskID, senderID uuid.UUID, sendAs string, newLead bool, arm *models.StepABArm, tracking models.SendTracking) (bool, error)
+}
+
+// pickLeadSendAs returns the bound lead's alias or a random verified one; held means do not send.
+func pickLeadSendAs(sa repository.CampaignLeadSendAs, intn func(int) int) (alias string, held bool) {
+	if sa.BoundHere {
+		return sa.LeadAlias, !sa.LeadAliasVerified
+	}
+	if sa.Configured == 0 {
+		return "", false
+	}
+	if len(sa.Verified) == 0 {
+		return "", true
+	}
+	return sa.Verified[intn(len(sa.Verified))], false
 }

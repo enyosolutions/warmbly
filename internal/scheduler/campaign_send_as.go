@@ -1,9 +1,18 @@
 package scheduler
 
-import "github.com/warmbly/warmbly/internal/models"
+import (
+	"context"
 
-// heldSendAsMailboxes names the pool's mailboxes held because the campaign's
-// send-as address on them is no longer verified (see gateSendAs).
+	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/models"
+)
+
+// leadSendAsCounter counts leads waiting on an unverified alias.
+type leadSendAsCounter interface {
+	CountLeadsWaitingOnSendAs(ctx context.Context, campaignID uuid.UUID) (int, error)
+}
+
+// heldSendAsMailboxes names the mailboxes closed to new leads by gateSendAs.
 func heldSendAsMailboxes(accounts []models.Email) []string {
 	var held []string
 	for _, a := range accounts {

@@ -12,20 +12,20 @@ import (
 func TestApplyCampaignSendAs(t *testing.T) {
 	mailbox := models.Email{ID: uuid.New(), Email: "jane@acme.test", SendAsEmail: "jane.alias@acme.test"}
 
-	if got := ApplyCampaignSendAs(mailbox, "  ", false); got.SendAsEmail != mailbox.SendAsEmail || got.CampaignSendAsHeld {
+	if got := ApplyCampaignSendAs(mailbox, nil, nil); got.SendAsEmail != mailbox.SendAsEmail || got.CampaignSendAsHeld {
 		t.Fatalf("no campaign alias changed the mailbox: %+v", got)
 	}
-	if got := ApplyCampaignSendAs(mailbox, "sales@acme.test", true); got.SendAsEmail != "sales@acme.test" || got.CampaignSendAsHeld {
-		t.Fatalf("verified campaign alias: from %q held %v, want sales@acme.test and not held", got.SendAsEmail, got.CampaignSendAsHeld)
+	// One alias still verified keeps the mailbox open to new leads, and the
+	// pool names a usable alias rather than the revoked one.
+	got := ApplyCampaignSendAs(mailbox, []string{"gone@acme.test", "sales@acme.test"}, []string{"GONE@acme.test"})
+	if got.CampaignSendAsHeld || got.SendAsEmail != "sales@acme.test" {
+		t.Fatalf("one verified alias left: from %q held %v, want sales@acme.test and open", got.SendAsEmail, got.CampaignSendAsHeld)
 	}
-	// The guard this feature rests on: an unverified alias holds the mailbox
-	// and keeps the alias, so nothing can fall back to another address.
-	got := ApplyCampaignSendAs(mailbox, "sales@acme.test", false)
-	if !got.CampaignSendAsHeld {
-		t.Fatal("an unverified campaign alias did not hold the mailbox")
-	}
-	if got.SendAsEmail != "sales@acme.test" || got.SendFrom() != "sales@acme.test" {
-		t.Fatalf("held mailbox would send from %q, want the campaign alias kept", got.SendFrom())
+	// None verified: held, and the alias kept, so nothing can fall back to
+	// another address.
+	got = ApplyCampaignSendAs(mailbox, []string{"gone@acme.test", "old@acme.test"}, []string{"gone@acme.test", "old@acme.test"})
+	if !got.CampaignSendAsHeld || got.SendFrom() != "gone@acme.test" {
+		t.Fatalf("no verified alias left: from %q held %v, want held on a campaign alias", got.SendFrom(), got.CampaignSendAsHeld)
 	}
 	if mailbox.SendAsEmail != "jane.alias@acme.test" || mailbox.CampaignSendAsHeld {
 		t.Fatal("ApplyCampaignSendAs changed the caller's mailbox")
@@ -33,7 +33,7 @@ func TestApplyCampaignSendAs(t *testing.T) {
 }
 
 // The scheduler, the send plan and previews all read the resolved pool, so the
-// campaign alias and its hold have to ride on the accounts it returns.
+// campaign's aliases and the hold have to ride on the accounts it returns.
 func TestResolveCampaignSenderPoolCarriesCampaignSendAs(t *testing.T) {
 	verified := models.Email{ID: uuid.New(), Email: "a@acme.test"}
 	held := models.Email{ID: uuid.New(), Email: "b@acme.test"}
@@ -41,9 +41,9 @@ func TestResolveCampaignSenderPoolCarriesCampaignSendAs(t *testing.T) {
 	tagged := models.Email{ID: uuid.New(), Email: "d@acme.test"}
 	src := &stubSenderSource{
 		explicit: []CampaignSenderAccount{
-			{Account: verified, SendAsEmail: "hello@acme.test", SendAsVerified: true},
-			{Account: held, SendAsEmail: "gone@acme.test", SendAsVerified: false},
-			{Account: plain, SendAsVerified: true},
+			{Account: verified, SendAsEmails: []string{"hello@acme.test", "hi@acme.test"}},
+			{Account: held, SendAsEmails: []string{"gone@acme.test"}, SendAsUnverified: []string{"gone@acme.test"}},
+			{Account: plain},
 		},
 		tagged: []models.Email{tagged},
 	}
@@ -59,7 +59,7 @@ func TestResolveCampaignSenderPoolCarriesCampaignSendAs(t *testing.T) {
 		byID[a.ID] = a
 	}
 	if a := byID[verified.ID]; a.SendFrom() != "hello@acme.test" || a.CampaignSendAsHeld {
-		t.Errorf("verified alias resolved to from=%q held=%v", a.SendFrom(), a.CampaignSendAsHeld)
+		t.Errorf("verified aliases resolved to from=%q held=%v", a.SendFrom(), a.CampaignSendAsHeld)
 	}
 	if a := byID[held.ID]; !a.CampaignSendAsHeld || a.SendFrom() != "gone@acme.test" {
 		t.Errorf("unverified alias resolved to from=%q held=%v, want held on the alias", a.SendFrom(), a.CampaignSendAsHeld)
@@ -69,5 +69,15 @@ func TestResolveCampaignSenderPoolCarriesCampaignSendAs(t *testing.T) {
 	}
 	if a := byID[tagged.ID]; a.SendFrom() != "d@acme.test" || a.CampaignSendAsHeld {
 		t.Errorf("tag-resolved mailbox resolved to from=%q held=%v", a.SendFrom(), a.CampaignSendAsHeld)
+	}
+}
+
+func TestNormalizeCampaignSendAs(t *testing.T) {
+	got, xerr := normalizeCampaignSendAs([]string{" a@acme.test ", "", "A@acme.test", "b@acme.test"})
+	if xerr != nil || len(got) != 2 || got[0] != "a@acme.test" || got[1] != "b@acme.test" {
+		t.Fatalf("normalize = %v, %v; want [a@acme.test b@acme.test]", got, xerr)
+	}
+	if _, xerr := normalizeCampaignSendAs([]string{"a@acme.test\r\nBcc: x@evil.test"}); xerr == nil {
+		t.Fatal("a header-injecting alias was accepted")
 	}
 }

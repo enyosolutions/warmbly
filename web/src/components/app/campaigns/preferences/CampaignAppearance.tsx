@@ -75,9 +75,9 @@ export function SendingAccountsSection({
     setNewCampaign: SetCampaign;
     explicitAccounts: string[];
     setExplicitAccounts: React.Dispatch<React.SetStateAction<string[]>>;
-    sendAs: Record<string, string>;
-    onSendAsChange: (accountId: string, alias: string) => void;
-    unverifiedSendAs: Record<string, boolean>;
+    sendAs: Record<string, string[]>;
+    onSendAsChange: (accountId: string, aliases: string[]) => void;
+    unverifiedSendAs: Record<string, string[]>;
 }) {
     const dailyInvalid = !isValidCampaignDailyLimit(newCampaign.daily_limit, savedDailyLimit);
     const dailyLegacy = !dailyInvalid && newCampaign.daily_limit <= 0;

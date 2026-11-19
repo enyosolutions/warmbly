@@ -234,13 +234,10 @@ type CampaignSender struct {
 	Weight         int        `json:"weight"`
 	LastSentAt     *time.Time `json:"last_sent_at,omitempty"`
 	Enabled        bool       `json:"enabled"`
-	// SendAsEmail is the Gmail send-as alias this campaign sends from on this
-	// mailbox. Empty keeps the mailbox's own choice.
-	SendAsEmail string `json:"send_as_email"`
-	// SendAsVerified reports whether the mailbox's provider still verifies
-	// SendAsEmail. False on a set alias means the mailbox is held for this
-	// campaign until it is verified again; always true when SendAsEmail is empty.
-	SendAsVerified bool `json:"send_as_verified"`
+	// SendAsEmails are the Gmail aliases new leads on this mailbox draw from; empty uses the mailbox's own choice.
+	SendAsEmails []string `json:"send_as_emails"`
+	// SendAsUnverified are the SendAsEmails the provider no longer verifies.
+	SendAsUnverified []string `json:"send_as_unverified"`
 }
 
 // CampaignSenderInput is the write shape for PUT /campaigns/:id/senders.
@@ -248,10 +245,8 @@ type CampaignSenderInput struct {
 	EmailAccountID uuid.UUID `json:"email_account_id"`
 	Weight         *int      `json:"weight,omitempty"`
 	Enabled        *bool     `json:"enabled,omitempty"`
-	// SendAsEmail picks a Gmail send-as alias for this campaign on this
-	// mailbox. Omitted keeps the stored choice, so a client that predates the
-	// field never clears one; "" clears it back to the mailbox's own choice.
-	SendAsEmail *string `json:"send_as_email,omitempty"`
+	// SendAsEmails: nil keeps the stored list, [] clears it; removal only affects new leads.
+	SendAsEmails *[]string `json:"send_as_emails,omitempty"`
 }
 
 type MiniCampaign struct {
@@ -399,8 +394,7 @@ const (
 	EstimateSenderRecovery   = "send_recovery"
 	EstimateSenderCooldown   = "send_cooldown"
 	EstimateSenderAdmission  = "send_authority"
-	// EstimateSenderSendAsUnverified: the campaign's send-as address on this
-	// mailbox is no longer verified by the provider, so it is held.
+	// EstimateSenderSendAsUnverified: none of the campaign's aliases on this mailbox is verified.
 	EstimateSenderSendAsUnverified = "send_as_unverified"
 )
 

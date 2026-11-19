@@ -2663,10 +2663,9 @@ type CampaignSenderAccount struct {
 	Weight           int
 	RotationPosition int
 	LastSentAt       *time.Time
-	// SendAsEmail is the campaign's alias for this mailbox; empty keeps the
-	// mailbox's own choice. SendAsVerified is CampaignSendAsVerifiedSQL.
-	SendAsEmail    string
-	SendAsVerified bool
+	// SendAsEmails are the campaign's aliases here; SendAsUnverified those no longer verified.
+	SendAsEmails     []string
+	SendAsUnverified []string
 }
 
 // GetByCampaignSenders mirrors GetByTags but resolves accounts through the
@@ -2689,7 +2688,7 @@ func (r *emailRepository) GetByCampaignSenders(ctx context.Context, scope Accoun
 		 ea.auth_state, ea.auth_failing_since, ea.worker_id,
 		 ea.created_at, ea.updated_at,
 		 cs.weight, cs.rotation_position, cs.last_sent_at,
-		 cs.send_as_email, ` + CampaignSendAsVerifiedSQL + `
+		 cs.send_as_emails, ` + campaignSendAsUnverifiedSQL + `
 		FROM email_accounts ea
 		JOIN campaign_senders cs ON cs.email_account_id = ea.id
 		WHERE cs.campaign_id = $2
@@ -2721,7 +2720,7 @@ func (r *emailRepository) GetByCampaignSenders(ctx context.Context, scope Accoun
 			&i.AuthState, &i.AuthFailingSince, &i.WorkerID,
 			&i.CreatedAt, &i.UpdatedAt,
 			&sender.Weight, &sender.RotationPosition, &sender.LastSentAt,
-			&sender.SendAsEmail, &sender.SendAsVerified,
+			&sender.SendAsEmails, &sender.SendAsUnverified,
 		)
 		if err != nil {
 			db.CaptureError(err, "", nil, "scan")

@@ -8,19 +8,25 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 )
 
-// A mailbox whose campaign alias is no longer verified is held for that
-// campaign, and paced: the leads it already writes to wait for it instead of
-// moving to another mailbox, and so to another From address.
-func TestCampaignSendAsHeldMailboxIsAPacedGate(t *testing.T) {
+// A mailbox with none of its campaign aliases verified is closed to new leads
+// only: a lead already on it is still placed there, with the budget it has.
+func TestCampaignSendAsHeldMailboxClosesToNewLeadsOnly(t *testing.T) {
+	id := uuid.New()
 	s := &schedulerService{}
 	pass := &campaignPass{health: map[uuid.UUID]healthRead{}, sentToday: map[uuid.UUID]int{}}
 
-	gate, remaining := s.gateFor(context.Background(), pass, models.Email{ID: uuid.New(), CampaignSendAsHeld: true}, 10)
-	if gate.reason != gateSendAs || !gate.paced || remaining != 0 {
-		t.Fatalf("held mailbox gave %+v with %d left, want a paced %q gate with nothing left", gate, remaining, gateSendAs)
+	gate, remaining := s.gateFor(context.Background(), pass, models.Email{ID: id, CampaignSendAsHeld: true}, 10)
+	if gate.reason != gateSendAs || gate.paced || !gate.newLeadsOnly {
+		t.Fatalf("held mailbox gave %+v, want a new-leads-only %q gate", gate, gateSendAs)
 	}
-	if !gate.reopensAt.IsZero() {
-		t.Fatalf("held mailbox reopens at %v; nothing knows when an alias is verified again", gate.reopensAt)
+	if remaining != 10 {
+		t.Fatalf("held mailbox kept %d of its budget, want 10 for the leads already on it", remaining)
+	}
+	if gate.admits(false) {
+		t.Fatal("the gate let a new lead in")
+	}
+	if !gate.admits(true) {
+		t.Fatal("the gate refused a lead already bound to the mailbox")
 	}
 }
 

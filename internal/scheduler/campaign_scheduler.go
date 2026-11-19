@@ -151,12 +151,12 @@ func (s *schedulerService) CalculateNextCampaignTime(ctx context.Context, campai
 				// rather than blaming a wait nobody configured.
 				message = "Every lead that is due is waiting for its own mailbox: each contact keeps the address they first heard from, and those mailboxes have nothing left for now"
 				metadata["waiting_on_sender"] = true
-				// "Nothing left" is wrong for a mailbox held on its campaign
-				// alias: it will not come back by itself, so say what to fix.
-				if held := heldSendAsMailboxes(accounts); len(held) > 0 {
-					message += fmt.Sprintf(". The send-as address this campaign uses on %s is no longer verified by the provider: verify it again, or pick another address for that mailbox in the campaign's senders",
-						strings.Join(held, ", "))
-					metadata["send_as_unverified"] = len(held)
+				// A lead waiting on its alias needs the owner, not time, so say what to fix.
+				if counter, ok := s.campaignProgressRepo.(leadSendAsCounter); ok {
+					if n, cerr := counter.CountLeadsWaitingOnSendAs(ctx, campaign.ID); cerr == nil && n > 0 {
+						message += fmt.Sprintf(". %d of them use a send-as address the provider no longer verifies: verify it again in Gmail, and they continue from that same address", n)
+						metadata["send_as_unverified_leads"] = n
+					}
 				}
 			}
 			if !senderWait && campaign.EntryDelayMinutes > 0 {
@@ -454,6 +454,7 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 	noWorker := 0
 	recoveryHeld := 0
 	cooling := 0
+	sendAsHeld := 0
 	var sendRecheck time.Time
 	var reopensAt time.Time
 	gates := map[uuid.UUID]mailboxGate{}
@@ -496,7 +497,7 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 		// the order the gate applies them. Same answer routing's availability
 		// pre-pass got, from the same reads.
 		gate, remaining := s.gateFor(ctx, pass, acct, acctLimit-sentToday)
-		if !gate.open() {
+		if !gate.admits(bound != nil && bound.ID == acct.ID) {
 			gates[acct.ID] = gate
 			switch gate.reason {
 			case gateAuth:
@@ -513,6 +514,8 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 				recoveryHeld++
 			case gateCooldown:
 				cooling++
+			case gateSendAs:
+				sendAsHeld++
 			}
 			if !gate.reopensAt.IsZero() && (sendRecheck.IsZero() || gate.reopensAt.Before(sendRecheck)) {
 				sendRecheck = gate.reopensAt
@@ -674,6 +677,12 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 				return resume, nil, accounts[0].ID, ErrLeadDeferred
 			}
 			return resume, nil, accounts[0].ID, ErrCampaignDeferred
+		case sendAsHeld > 0 && sendAsHeld+lifecycleGated+healthHeld+authGated == len(accounts):
+			// Every usable mailbox is closed to new leads by unverified aliases; only the owner can fix it, so look again tomorrow.
+			logDecisionOnce("mailboxes_send_as_unverified",
+				fmt.Sprintf("No mailbox can start a new lead: the provider no longer verifies any of the send-as addresses this campaign lists for %d of them. Verify them again in Gmail, or change the addresses in the campaign's sending accounts", sendAsHeld),
+				map[string]interface{}{"send_as_unverified": sendAsHeld, "mailboxes_held": heldSendAsMailboxes(accounts), "pool_size": len(accounts)})
+			return s.deferToNextDay(campaign, preview), nil, accounts[0].ID, ErrCampaignDeferred
 		case lifecycleGated == len(accounts):
 			// Every mailbox is out of cold rotation. Say so rather than letting
 			// the campaign look stalled for no visible reason; they return on
@@ -784,11 +793,8 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 		if bound != nil {
 			gate := gates[bound.ID]
 			if gate.paced {
-				message := "Some leads are waiting for their own mailbox: every contact keeps the address they first heard from, and that mailbox has nothing left for now"
-				if gate.reason == gateSendAs {
-					message = "Some leads are waiting for their own mailbox: the send-as address this campaign uses on it is no longer verified by the provider. Verify it again, or pick another address for this mailbox in the campaign's senders"
-				}
-				logDecisionOnce("sender_busy", message,
+				logDecisionOnce("sender_busy",
+					"Some leads are waiting for their own mailbox: every contact keeps the address they first heard from, and that mailbox has nothing left for now",
 					map[string]interface{}{"mailbox": bound.Email, "reason": gate.reason})
 				resume := gate.reopensAt
 				if resume.IsZero() {

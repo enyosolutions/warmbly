@@ -198,8 +198,7 @@ const (
 	MailboxPlanWindowClosed = "window_closed"
 	// MailboxPlanNoWorker is a mailbox no heartbeating worker holds right now.
 	MailboxPlanNoWorker = "no_worker"
-	// MailboxPlanSendAsUnverified is a mailbox whose campaign alias its
-	// provider no longer verifies: held for this campaign, its leads waiting.
+	// MailboxPlanSendAsUnverified is a mailbox closed to new leads: none of its campaign aliases is verified.
 	MailboxPlanSendAsUnverified = "send_as_unverified"
 )
 

@@ -162,7 +162,7 @@ func (d Deps) registerCampaignTools(r *Registry) {
 
 	r.Register(Tool{
 		Name:        "list_campaign_senders",
-		Description: "List the mailboxes assigned to send a campaign, with their weight, enabled state and the Gmail send-as address the campaign uses on each (send_as_verified false means that mailbox is held for this campaign until the address is verified again).",
+		Description: "List the mailboxes assigned to send a campaign, with their weight, enabled state and the Gmail send-as addresses the campaign rotates between on each (send_as_unverified lists those no longer verified: new leads skip them and leads already on one wait).",
 		InputSchema: objectSchema(map[string]any{
 			"campaign_id": strProp("The campaign's UUID."),
 		}, "campaign_id"),
@@ -174,14 +174,14 @@ func (d Deps) registerCampaignTools(r *Registry) {
 
 	r.Register(Tool{
 		Name:        "set_campaign_senders",
-		Description: "Replace the set of sender mailboxes for a campaign (each with an optional weight, enabled flag and Gmail send-as address).",
+		Description: "Replace the set of sender mailboxes for a campaign (each with an optional weight, enabled flag and list of Gmail send-as addresses).",
 		InputSchema: objectSchema(map[string]any{
 			"campaign_id": strProp("The campaign's UUID."),
 			"senders": arrProp("The full sender set to apply.", objectSchema(map[string]any{
 				"email_account_id": strProp("Mailbox UUID."),
 				"weight":           intProp("Relative send weight."),
 				"enabled":          boolProp("Whether this sender is active."),
-				"send_as_email":    strProp("Gmail only: a send-as address the provider has verified for this mailbox, used as From for this campaign. Omit to keep the current one; empty string to use the mailbox's own choice."),
+				"send_as_emails":   arrProp("Gmail only: send-as addresses the provider has verified for this mailbox. Each new lead gets one at random and keeps it for its whole sequence. Omit to keep the current list; an empty list uses the mailbox's own address.", strProp("A verified send-as address.")),
 			}, "email_account_id")),
 		}, "campaign_id", "senders"),
 		Risk:            generation.RiskWrite,
@@ -334,10 +334,10 @@ func (d Deps) setCampaignSenders(ctx context.Context, inv Invocation, args json.
 	in, err := decodeArgs[struct {
 		CampaignID string `json:"campaign_id"`
 		Senders    []struct {
-			EmailAccountID string  `json:"email_account_id"`
-			Weight         *int    `json:"weight"`
-			Enabled        *bool   `json:"enabled"`
-			SendAsEmail    *string `json:"send_as_email"`
+			EmailAccountID string    `json:"email_account_id"`
+			Weight         *int      `json:"weight"`
+			Enabled        *bool     `json:"enabled"`
+			SendAsEmails   *[]string `json:"send_as_emails"`
 		} `json:"senders"`
 	}](args)
 	if err != nil {
@@ -353,7 +353,7 @@ func (d Deps) setCampaignSenders(ctx context.Context, inv Invocation, args json.
 		if perr != nil {
 			return "", perr
 		}
-		inputs = append(inputs, models.CampaignSenderInput{EmailAccountID: aid, Weight: s.Weight, Enabled: s.Enabled, SendAsEmail: s.SendAsEmail})
+		inputs = append(inputs, models.CampaignSenderInput{EmailAccountID: aid, Weight: s.Weight, Enabled: s.Enabled, SendAsEmails: s.SendAsEmails})
 	}
 	senders, xerr := d.Campaigns.ReplaceCampaignSenders(ctx, inv.OrgID, in.CampaignID, inputs)
 	if xerr != nil {

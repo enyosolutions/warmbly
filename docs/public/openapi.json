@@ -51380,13 +51380,19 @@
           "enabled": {
             "type": "boolean"
           },
-          "send_as_email": {
-            "type": "string",
-            "description": "Gmail send-as address this campaign sends from on the mailbox. Empty means the mailbox's own choice."
+          "send_as_emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Gmail send-as addresses this campaign rotates between on the mailbox. Each new lead gets one at random and keeps it. Empty means the mailbox's own choice."
           },
-          "send_as_verified": {
-            "type": "boolean",
-            "description": "False when the provider no longer verifies send_as_email: the mailbox is held for this campaign and its leads wait."
+          "send_as_unverified": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The send_as_emails the provider no longer verifies: new leads skip them and leads already on one wait."
           }
         }
       },
@@ -51406,9 +51412,12 @@
           "enabled": {
             "type": "boolean"
           },
-          "send_as_email": {
-            "type": "string",
-            "description": "Gmail only. A send-as address the provider has verified for this mailbox. Omit to keep the current one; empty string for the mailbox's own choice."
+          "send_as_emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Gmail only. Send-as addresses the provider has verified for this mailbox. Omit to keep the current list; [] for the mailbox's own choice."
           }
         }
       },

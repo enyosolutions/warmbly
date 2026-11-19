@@ -1,17 +1,11 @@
-// CampaignSendAs: which Gmail send-as address this campaign writes from on each
-// of its individually picked mailboxes. One row per picked Gmail mailbox; other
-// providers expose no send-as list, so they are listed as using their own
-// address. Mailboxes resolved from tags carry no per-campaign choice.
-//
-// A stored address the provider has stopped verifying stays selected and is
-// flagged: the mailbox is held for this campaign until it is verified again or
-// another address is picked. It is never silently replaced.
+// Which Gmail send-as addresses this campaign rotates between on each of its
+// individually picked mailboxes. Each new lead gets one at random and keeps it.
 
 import React from "react";
 import { AlertTriangleIcon } from "lucide-react";
 import useEmails from "@/lib/api/hooks/app/emails/useEmails";
 import useSendIdentity from "@/lib/api/hooks/app/emails/useSendIdentity";
-import { SelectMenu, type SelectOption } from "@/components/ui/select-menu";
+import { Checkbox } from "@/components/ui/checkbox";
 import type Inbox from "@/lib/api/models/app/emails/Inbox";
 
 export default function CampaignSendAs({
@@ -21,10 +15,10 @@ export default function CampaignSendAs({
     unverified,
 }: {
     accountIds: string[];
-    sendAs: Record<string, string>;
-    onChange: (accountId: string, alias: string) => void;
+    sendAs: Record<string, string[]>;
+    onChange: (accountId: string, aliases: string[]) => void;
     /** Saved aliases the provider no longer verifies, by mailbox id. */
-    unverified: Record<string, boolean>;
+    unverified: Record<string, string[]>;
 }) {
     const { emails } = useEmails({ query: "", tag: "" });
     const byId = React.useMemo(() => {
@@ -44,16 +38,16 @@ export default function CampaignSendAs({
                     <SendAsRow
                         key={mailbox.id}
                         mailbox={mailbox}
-                        value={sendAs[mailbox.id] ?? ""}
+                        value={sendAs[mailbox.id] ?? []}
                         onChange={(v) => onChange(mailbox.id, v)}
-                        unverified={!!unverified[mailbox.id]}
+                        unverified={unverified[mailbox.id] ?? []}
                     />
                 ))}
             </div>
             <p className="text-[11px] text-slate-400 mt-1.5">
-                Gmail mailboxes only. The address must be verified in Gmail&apos;s settings first. If Gmail stops
-                verifying it, the mailbox sends nothing for this campaign and its leads wait until it is verified again
-                or you pick another address.
+                Gmail mailboxes only. Tick one or more verified addresses: each new lead gets one at random and keeps it
+                for every follow-up. None ticked sends from the mailbox&apos;s own address. If Gmail stops verifying an
+                address, new leads skip it and the leads already on it wait until it is verified again.
             </p>
         </div>
     );
@@ -66,52 +60,80 @@ function SendAsRow({
     unverified,
 }: {
     mailbox: Inbox;
-    value: string;
-    onChange: (v: string) => void;
-    unverified: boolean;
+    value: string[];
+    onChange: (v: string[]) => void;
+    unverified: string[];
 }) {
     const isGmail = mailbox.provider === "gmail";
     const identity = useSendIdentity(mailbox.id, isGmail);
+    const lower = (s: string) => s.toLowerCase();
+    const selected = new Set(value.map(lower));
+    const revoked = new Set(unverified.map(lower));
 
-    const mailboxDefault = mailbox.send_as_email?.trim() || mailbox.email;
-    const options: SelectOption[] = [{ value: "", label: `Mailbox default (${mailboxDefault})` }];
-    for (const id of identity.data?.identities ?? []) {
-        options.push({
-            value: id.email,
-            label: id.verified ? (id.name ? `${id.name} · ${id.email}` : id.email) : `${id.email} (not verified)`,
-            disabled: !id.verified,
-        });
+    type Option = { email: string; label: string; verified: boolean };
+    const options: Option[] = (identity.data?.identities ?? []).map((id) => ({
+        email: id.email,
+        label: id.name ? `${id.name} · ${id.email}` : id.email,
+        verified: id.verified,
+    }));
+    // A stored choice the provider no longer lists still has to show as ticked.
+    for (const v of value) {
+        if (!options.some((o) => lower(o.email) === lower(v))) {
+            options.push({ email: v, label: `${v} (no longer listed)`, verified: false });
+        }
     }
-    // A stored choice the provider no longer lists still has to show as selected.
-    if (value && !options.some((o) => o.value.toLowerCase() === value.toLowerCase())) {
-        options.push({ value, label: `${value} (no longer listed)` });
-    }
+
+    const toggle = (email: string) => {
+        if (selected.has(lower(email))) onChange(value.filter((v) => lower(v) !== lower(email)));
+        else onChange([...value, email]);
+    };
 
     return (
-        <div className="px-3 py-2 flex items-center gap-3">
-            <div className="min-w-0 flex-1">
-                <div className="text-[12px] text-slate-700 truncate">{mailbox.email}</div>
-                {unverified && value && (
-                    <div className="flex items-center gap-1 text-[11px] text-amber-600 mt-0.5">
-                        <AlertTriangleIcon className="w-3 h-3 shrink-0" />
-                        Not verified by Gmail anymore: this mailbox is held for this campaign.
-                    </div>
-                )}
-            </div>
-            <div className="w-72 shrink-0">
-                {isGmail ? (
-                    <SelectMenu
-                        value={value}
-                        onChange={onChange}
-                        options={options}
-                        fullWidth
-                        disabled={identity.isLoading}
-                        aria-label={`Send as for ${mailbox.email}`}
-                    />
-                ) : (
-                    <div className="text-[11.5px] text-slate-400">Own address (no send-as on this provider)</div>
-                )}
-            </div>
+        <div className="px-3 py-2">
+            <div className="text-[12px] text-slate-700 truncate">{mailbox.email}</div>
+            {!isGmail ? (
+                <div className="text-[11.5px] text-slate-400 mt-0.5">Own address (no send-as on this provider)</div>
+            ) : identity.isLoading ? (
+                <div className="text-[11.5px] text-slate-400 mt-0.5">Loading addresses…</div>
+            ) : options.length === 0 ? (
+                <div className="text-[11.5px] text-slate-400 mt-0.5">No send-as address verified in Gmail yet</div>
+            ) : (
+                <div className="mt-1.5 flex flex-col gap-1">
+                    {options.map((o) => {
+                        const checked = selected.has(lower(o.email));
+                        const stale = checked && (revoked.has(lower(o.email)) || !o.verified);
+                        return (
+                            <label
+                                key={o.email}
+                                className={`flex items-center gap-2 text-[12px] ${
+                                    o.verified || checked ? "text-slate-700 cursor-pointer" : "text-slate-400"
+                                }`}
+                            >
+                                <Checkbox
+                                    tone="slate"
+                                    checked={checked}
+                                    disabled={!o.verified && !checked}
+                                    onChange={() => toggle(o.email)}
+                                    aria-label={`Send as ${o.email} from ${mailbox.email}`}
+                                />
+                                <span className="truncate">{o.label}</span>
+                                {!o.verified && !checked && <span className="text-[11px]">(not verified)</span>}
+                                {stale && (
+                                    <span className="inline-flex items-center gap-1 text-[11px] text-amber-600">
+                                        <AlertTriangleIcon className="w-3 h-3 shrink-0" />
+                                        not verified anymore: its leads wait
+                                    </span>
+                                )}
+                            </label>
+                        );
+                    })}
+                    {value.length === 0 && (
+                        <div className="text-[11px] text-slate-400">
+                            None ticked: sends as {mailbox.send_as_email?.trim() || mailbox.email}
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }

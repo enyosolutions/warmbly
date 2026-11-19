@@ -1502,14 +1502,14 @@ A `data` array of sender objects (no pagination wrapper).
       "weight": 1,
       "last_sent_at": "2026-06-10T11:55:00Z",
       "enabled": true,
-      "send_as_email": "hello@acme.com",
-      "send_as_verified": true
+      "send_as_emails": ["hello@acme.com", "team@acme.com"],
+      "send_as_unverified": []
     }
   ]
 }
 ```
 
-`send_as_email` is the Gmail send-as address the campaign sends from on that mailbox; empty means the mailbox's own choice. `send_as_verified` is `false` when the provider no longer verifies that address: the mailbox is then held for this campaign, sends nothing for it, and the leads it already writes to wait until the address is verified again or another one is picked. New leads go to the campaign's other mailboxes.
+`send_as_emails` are the Gmail send-as addresses the campaign rotates between on that mailbox: each new lead gets one at random and keeps it for its whole sequence. Empty means the mailbox's own choice. `send_as_unverified` lists those the provider no longer verifies: new leads skip them, and leads already on one wait until it is verified again. When it holds every address in the list, the mailbox takes no new lead for this campaign.
 
 ## Replace senders
 
@@ -1525,7 +1525,7 @@ Atomically replace the campaign's explicit sender pool with the supplied list. *
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `senders` | object[] | yes | The full new sender pool. Each item: `email_account_id` (uuid, required), `weight` (integer, optional), `enabled` (boolean, optional), `send_as_email` (string, optional: a Gmail send-as address the provider has verified for that mailbox; omit to keep the current one, `""` to use the mailbox's own choice; refused with `mailbox_send_as_unsupported` on a non-Gmail mailbox and `mailbox_send_as_unknown` for an unverified address). An empty array clears the pool. What that means depends on the campaign's `sender_strategy`: a `tags` campaign falls back to its tags or to every active mailbox, while an `explicit` one falls back to its tags only, and with none it is left with no mailbox to send from and parks itself at `paused_no_accounts`. |
+| `senders` | object[] | yes | The full new sender pool. Each item: `email_account_id` (uuid, required), `weight` (integer, optional), `enabled` (boolean, optional), `send_as_emails` (string[], optional: Gmail send-as addresses the provider has verified for that mailbox; omit to keep the current list, `[]` to use the mailbox's own choice; removing an address only affects new leads; refused with `mailbox_send_as_unsupported` on a non-Gmail mailbox and `mailbox_send_as_unknown` for an unverified address). An empty array clears the pool. What that means depends on the campaign's `sender_strategy`: a `tags` campaign falls back to its tags or to every active mailbox, while an `explicit` one falls back to its tags only, and with none it is left with no mailbox to send from and parks itself at `paused_no_accounts`. |
 
 ```json
 {

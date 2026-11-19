@@ -44,11 +44,9 @@ func ResolveCampaignSenderPool(ctx context.Context, repo CampaignSenderSource, c
 	if err != nil {
 		return pool, err
 	}
-	// The campaign's own alias rides on the explicit pool's copies, so every
-	// caller (the scheduler's gates, the send plan, previews) sees the address
-	// this campaign actually sends as, and which mailboxes it holds.
+	// The campaign's aliases ride on the pool's copies so gates, plan and previews all see them.
 	for i := range explicit {
-		explicit[i].Account = ApplyCampaignSendAs(explicit[i].Account, explicit[i].SendAsEmail, explicit[i].SendAsVerified)
+		explicit[i].Account = ApplyCampaignSendAs(explicit[i].Account, explicit[i].SendAsEmails, explicit[i].SendAsUnverified)
 	}
 	pool.Explicit = explicit
 	seen := map[string]bool{}
@@ -78,17 +76,24 @@ func ResolveCampaignSenderPool(ctx context.Context, repo CampaignSenderSource, c
 	return pool, nil
 }
 
-// ApplyCampaignSendAs returns the mailbox as one campaign sends from it. An
-// empty campaign alias leaves the mailbox's own choice. A set one replaces it
-// when verified, and otherwise marks the mailbox held: the alias is kept, so a
-// held mailbox can never quietly send from the mailbox address instead.
-func ApplyCampaignSendAs(acct models.Email, alias string, verified bool) models.Email {
-	alias = strings.TrimSpace(alias)
-	if alias == "" {
+// ApplyCampaignSendAs holds the mailbox for new leads when none of its aliases is verified; the per-lead pick happens at send time.
+func ApplyCampaignSendAs(acct models.Email, aliases, unverified []string) models.Email {
+	if len(aliases) == 0 {
 		return acct
 	}
-	acct.SendAsEmail = alias
-	acct.CampaignSendAsHeld = !verified
+	bad := make(map[string]struct{}, len(unverified))
+	for _, a := range unverified {
+		bad[strings.ToLower(a)] = struct{}{}
+	}
+	for _, a := range aliases {
+		if _, held := bad[strings.ToLower(a)]; !held {
+			acct.SendAsEmail = a
+			acct.CampaignSendAsHeld = false
+			return acct
+		}
+	}
+	acct.SendAsEmail = aliases[0]
+	acct.CampaignSendAsHeld = true
 	return acct
 }
 

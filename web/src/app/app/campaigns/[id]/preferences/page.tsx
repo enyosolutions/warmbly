@@ -183,13 +183,11 @@ export default function CampaignPreferences() {
     const [savedAccounts, setSavedAccounts] = React.useState<string[]>([]);
     // The campaign's send-as address per picked mailbox ("" = the mailbox's own
     // choice), its saved baseline, and the saved ones Gmail no longer verifies.
-    const [sendAs, setSendAs] = React.useState<Record<string, string>>({});
-    const [savedSendAs, setSavedSendAs] = React.useState<Record<string, string>>({});
+    const [sendAs, setSendAs] = React.useState<Record<string, string[]>>({});
+    const [savedSendAs, setSavedSendAs] = React.useState<Record<string, string[]>>({});
     const unverifiedSendAs = React.useMemo(() => {
-        const out: Record<string, boolean> = {};
-        for (const s of senders ?? []) {
-            if (s.send_as_email && s.send_as_verified === false) out[s.email_account_id] = true;
-        }
+        const out: Record<string, string[]> = {};
+        for (const s of senders ?? []) out[s.email_account_id] = s.send_as_unverified ?? [];
         return out;
     }, [senders]);
 
@@ -206,8 +204,8 @@ export default function CampaignPreferences() {
         const accountIds = senders.map((s) => s.email_account_id);
         setExplicitAccounts(accountIds);
         setSavedAccounts(accountIds);
-        const aliases: Record<string, string> = {};
-        for (const s of senders) aliases[s.email_account_id] = s.send_as_email ?? "";
+        const aliases: Record<string, string[]> = {};
+        for (const s of senders) aliases[s.email_account_id] = s.send_as_emails ?? [];
         setSendAs(aliases);
         setSavedSendAs(aliases);
     }, [senders]);
@@ -316,7 +314,10 @@ export default function CampaignPreferences() {
     // save that touches nothing else never re-sends (and re-validates) a stored
     // address Gmail has since stopped verifying.
     const sendAsChanged = React.useCallback(
-        (id: string) => (sendAs[id] ?? "") !== (savedSendAs[id] ?? ""),
+        (id: string) => {
+            const key = (l: string[] | undefined) => (l ?? []).map((a) => a.toLowerCase()).sort().join("\n");
+            return key(sendAs[id]) !== key(savedSendAs[id]);
+        },
         [sendAs, savedSendAs],
     );
     const accountsDirty = React.useMemo(() => {
@@ -364,13 +365,13 @@ export default function CampaignPreferences() {
                             explicitAccounts.map((id) => ({
                                 email_account_id: id,
                                 weight: 1,
-                                ...(sendAsChanged(id) && { send_as_email: sendAs[id] ?? "" }),
+                                ...(sendAsChanged(id) && { send_as_emails: sendAs[id] ?? [] }),
                             })),
                         );
                         setSavedAccounts(explicitAccounts);
                         setSavedSendAs((bef) => {
                             const next = { ...bef };
-                            for (const id of explicitAccounts) next[id] = sendAs[id] ?? "";
+                            for (const id of explicitAccounts) next[id] = sendAs[id] ?? [];
                             return next;
                         });
                     }

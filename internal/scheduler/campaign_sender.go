@@ -41,9 +41,16 @@ type mailboxGate struct {
 	reopensAt time.Time
 	// cloudStatus marks a health hold that is only a missing Warmbly Cloud report.
 	cloudStatus bool
+	// newLeadsOnly marks a gate that refuses new leads but admits leads already bound here.
+	newLeadsOnly bool
 }
 
 func (g mailboxGate) open() bool { return g.reason == "" }
+
+// admits reports whether the mailbox may take a lead, given whether it is bound here.
+func (g mailboxGate) admits(boundHere bool) bool {
+	return g.open() || (g.newLeadsOnly && boundHere)
+}
 
 // Gate reasons. They double as the metadata the empty-pool activity-log lines
 // count, so keep them stable.
@@ -60,9 +67,7 @@ const (
 	gateRecovery  = "send_recovery"
 	gateCooldown  = "send_cooldown"
 	gateAdmission = "send_authority"
-	// gateSendAs is a mailbox whose campaign alias its provider no longer
-	// verifies. Paced: the campaign chose that address, so its leads wait for
-	// it rather than hear from another one, and new leads go elsewhere.
+	// gateSendAs: none of the campaign's aliases here is verified; closed to new leads only.
 	gateSendAs = "send_as_unverified"
 )
 
@@ -313,13 +318,6 @@ func (s *schedulerService) gateFor(ctx context.Context, p *campaignPass, acct mo
 			remaining = int(float64(remaining) * adjustmentFor(h.state).volumeMultiplier)
 		}
 	}
-	// The campaign's alias for this mailbox is no longer verified. After the
-	// standing gates, which move a lead on their own terms; this one only ever
-	// holds. No reopen time: nothing here knows when the alias comes back, so
-	// a waiting lead is looked at again the next day.
-	if acct.CampaignSendAsHeld {
-		return mailboxGate{reason: gateSendAs, paced: true}, 0
-	}
 	// No worker can take the send, so picking the mailbox would only fail the
 	// hand-off. Paced: the worker reconciler places it again within minutes,
 	// and a lead bound to it waits rather than changing address. After the
@@ -329,6 +327,10 @@ func (s *schedulerService) gateFor(ctx context.Context, p *campaignPass, acct mo
 	}
 	if remaining <= 0 {
 		return mailboxGate{reason: gateBudget, paced: true}, 0
+	}
+	// Last, so a real outage reports itself and bound leads keep the budget.
+	if acct.CampaignSendAsHeld {
+		return mailboxGate{reason: gateSendAs, newLeadsOnly: true}, remaining
 	}
 	return mailboxGate{}, remaining
 }
@@ -442,7 +444,8 @@ func (s *schedulerService) pacedSenders(ctx context.Context, p *campaignPass, ac
 		}
 		acctLimit := p.effectiveCap(acct)
 		gate, remaining := s.gateFor(ctx, p, acct, acctLimit-sentToday)
-		if gate.open() {
+		// Routing only asks about bound leads, which a new-leads-only gate admits.
+		if gate.admits(true) {
 			// Same clock gates the placement pass applies, asked about now.
 			_, _, _, gate = s.windowFor(ctx, p, acct, now, acctLimit, remaining, false)
 		}

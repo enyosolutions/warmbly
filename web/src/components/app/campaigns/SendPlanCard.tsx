@@ -69,8 +69,8 @@ const LIMIT_META: Record<SendLimitKind, LimitMeta> = {
         to: "/app/emails",
     },
     send_as_unverified: {
-        label: "Send-as address not verified",
-        hint: "Gmail no longer verifies the send-as address this campaign uses on a mailbox. It sends nothing for this campaign and its leads wait until the address is verified again or another one is picked.",
+        label: "Send-as addresses not verified",
+        hint: "Gmail verifies none of the send-as addresses this campaign ticked for a mailbox, so it starts no new lead. Leads already on it keep sending from their own address while Gmail verifies it.",
         to: "preferences#senders",
     },
     other_campaigns: {

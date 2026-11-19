@@ -271,6 +271,17 @@ Two things can happen to a lead's mailbox, and Warmbly treats them differently:
 
 Removing a mailbox from **Sending accounts** therefore hands its in-flight leads to the remaining mailboxes as each of them reaches its next step. Adding a mailbox never moves an existing lead; it picks up new ones.
 
+### Send-as addresses per campaign
+
+A Gmail mailbox picked individually in **Sending accounts** shows its send-as addresses under **Send as**, the ones Gmail has verified for it. The mailbox has to be connected with **Sign in with Google**, because that is what lets Warmbly read the verified list; an app-password or SMTP mailbox sends from its own address. Tick one or more:
+
+- Each new lead on that mailbox gets one of the ticked addresses at random, and every follow-up to that lead comes from the same address.
+- With none ticked, the mailbox sends from its own address, or from the send-as address chosen on the mailbox itself.
+- Untick an address and only new leads stop getting it. Leads already writing from it keep it, for as long as Gmail verifies it.
+- When Gmail stops verifying an address, new leads skip it, and the leads already on it wait until it is verified again rather than switch address mid-conversation. The other leads keep sending. When none of the ticked addresses is verified, the mailbox takes no new lead for this campaign. The activity log says which.
+
+The addresses share the mailbox's daily cap and minimum gap: they vary the From address, not the volume. Mailboxes picked by tag, or the **All active mailboxes** default, send from their own address.
+
 </Fold>
 
 <Fold>
